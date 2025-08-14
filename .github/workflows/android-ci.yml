@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,21 +18,63 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+          cache: gradle
 
-      - name: Gradle cache
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager --install "platforms;android-34" "build-tools;34.0.1" "platform-tools"
+
+      - name: Setup Gradle (cache)
         uses: gradle/actions/setup-gradle@v3
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/wrapper-validation-action@v2
 
       - name: Make Gradle wrapper executable
-        run: chmod +x ./gradlew || true
+        run: chmod +x ./gradlew
 
-      - name: Build all debug APKs
-        run: ./gradlew assembleDebug || echo "No modules yet, will succeed once we add apps"
+      - name: Print Gradle projects (sanity)
+        run: ./gradlew projects
 
-      - name: Upload APKs
+      - name: Build Debug APK
+        run: ./gradlew :apps:repurpose:assembleDebug --stacktrace -Dorg.gradle.configuration-cache=true
+
+      - name: List build outputs
+        run: |
+          echo "----- Expected directory tree -----"
+          ls -lah apps/repurpose/build/outputs || true
+          echo "----- All APKs found in repo -----"
+          find . -type f -name "*.apk" -printf "%p (%k KB)\n" | sort || true
+
+      # Strict upload from the expected path (if present)
+      - name: Upload Repurpose APK (strict path)
+        uses: actions/upload-artifact@v4
+        with:
+          name: repurpose-apk
+          path: apps/repurpose/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
+
+      # Fallback: upload any APKs we can find anywhere in the repo
+      - name: Upload any APKs (fallback)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: apk-artifacts
+          name: all-apks
           path: |
-            **/build/outputs/apk/**/*.apk
-          if-no-files-found: ignore
+            **/*.apk
+          if-no-files-found: error
+
+      # If the build fails, save logs so we can actually see why
+      - name: Archive Gradle logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-logs
+          path: |
+            **/build/reports/**/*
+            **/*.log
+          if-no-files-found: warn
